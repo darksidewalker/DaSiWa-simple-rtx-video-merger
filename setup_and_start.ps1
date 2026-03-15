@@ -8,7 +8,7 @@ if (!(Get-Command uv -ErrorAction SilentlyContinue)) {
 
 # 2. Ensure venv exists and deps are synced
 Write-Host "Syncing virtual environment..." -ForegroundColor Cyan
-uv venv
+uv venv --clear --python 3.12
 uv pip install -r requirements.txt --quiet
 
 # 3. Run the tool
