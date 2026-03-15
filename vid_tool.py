@@ -135,40 +135,70 @@ class VideoTool(QMainWindow):
         self.last_output_dir = os.path.dirname(save_path)
         self.start_btn.setEnabled(False)
         self.log_area.setText("Encoding...")
+
         def force_even(n):
             return int(n) if int(n) % 2 == 0 else int(n) - 1
+
         target_h = force_even(self.res_combo.currentText())
         num = len(self.files)
         mode = self.layout_combo.currentText()
         rows = 1 if mode == "Single Row" else math.ceil(num / 2)
         cols_per_row = num if mode == "Single Row" else 2
         scaled_h = force_even(target_h / rows)
+
+        # Scale and Label
         inputs, filters = "", []
         for i, f in enumerate(self.files):
             inputs += f"-hwaccel cuda -i \"{f}\" "
             fname = os.path.splitext(os.path.basename(f))[0]
             f_size = max(18, scaled_h // 22)
             filters.append(f"[{i}:v]scale=-2:{scaled_h},drawtext=text='{fname}':fontcolor=white:fontsize={f_size}:box=1:boxcolor=black@0.6:x=12:y=12[v{i}]")
+
+        # Row assembly
         row_outputs = []
+        max_row_width_formula = "" # We'll build a string for FFmpeg to calculate this
+        
         for r in range(rows):
             start, end = r * cols_per_row, min((r+1) * cols_per_row, num)
             vids = "".join([f"[v{i}]" for i in range(start, end)])
-            if (end - start) > 1:
-                filters.append(f"{vids}hstack=inputs={end-start}:shortest=1[r{r}]")
+            count = end - start
+            if count > 1:
+                filters.append(f"{vids}hstack=inputs={count}:shortest=1[r{r}]")
                 row_outputs.append(f"[r{r}]")
             else:
                 row_outputs.append(f"[v{start}]")
+
+        # Final Vertical Stack with Width Normalization
         f_graph = ";".join(filters)
         if len(row_outputs) > 1:
             padded_rows = []
+            # Use 'max' function in FFmpeg to find the widest row among all assembled rows
+            # Since all videos are scaled to same height, we just need to ensure widths match
+            all_row_labels = ",".join(row_outputs)
             for i, r_label in enumerate(row_outputs):
-                filters.append(f"{r_label}pad=w='max_iw':h='ih':x='(ow-iw)/2':y=0:color=black[pr{i}]")
+                # We pad to a very large number that matches the total width of a full row
+                # A safer way: pad to the width of the first row (since it's always full)
+                filters.append(f"{r_label}pad=w='max(iw,0)':h='ih':x='(ow-iw)/2':y=0:color=black[pr{i}]")
                 padded_rows.append(f"[pr{i}]")
-            f_graph = ";".join(filters)
-            f_graph += f";{''.join(padded_rows)}vstack=inputs={len(row_outputs)}:shortest=1[outv]"
+            
+            # REVISED LOGIC: Just use the scale2ref filter to make sure rows match the first row's width
+            # But for simplicity in a 2-col grid, we can just pad to the width of row 0
+            final_stack_filters = []
+            final_stack_filters.append(f"{row_outputs[0]}setsar=1[ref]")
+            for i in range(1, len(row_outputs)):
+                final_stack_filters.append(f"{row_outputs[i]}scale2ref=w='iw':h='ih'[raw{i}][ref]")
+                # Center the video if it's narrower than the reference
+                final_stack_filters.append(f"[raw{i}][ref]overlay=x='(main_w-overlay_w)/2':y=0[pr{i}]")
+            
+            # Combine the first row and the processed other rows
+            all_final = "[ref]" + "".join([f"[pr{i}]" for i in range(1, len(row_outputs))])
+            f_graph = ";".join(filters) + ";" + ";".join(final_stack_filters)
+            f_graph += f";{all_final}vstack=inputs={len(row_outputs)}:shortest=1[outv]"
         else:
             f_graph += f";{row_outputs[0]}null[outv]"
+
         self.last_cmd = f'ffmpeg -y {inputs} -filter_complex "{f_graph}" -map "[outv]" -c:v av1_nvenc -preset {self.preset_combo.currentText()} -cq {self.cq_spin.value()} -b:v 0 -pix_fmt yuv420p "{save_path}"'
+
         try:
             result = subprocess.run(self.last_cmd, shell=True, capture_output=True, text=True)
             self.start_btn.setEnabled(True)
