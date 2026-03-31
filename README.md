@@ -1,4 +1,4 @@
-# DaSiWa-simple-rtx-video-merger
+# DaSiWa-simple-rtx-video-assambler
 
 A specialized tool for creating side-by-side or grid comparisons using NVENC AV1 hardware acceleration.
 
